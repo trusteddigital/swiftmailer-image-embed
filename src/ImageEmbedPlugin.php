@@ -56,8 +56,12 @@ class ImageEmbedPlugin implements Swift_Events_SendListener
     {
         $body = $part === null ? $message->getBody() : $part->getBody();
 
-        $dom = new \DOMDocument('1.0');
+		$internalErrors = libxml_use_internal_errors(true);
+
+        $dom = new \DOMDocument('1.0', 'UTF-8');
         $dom->loadHTML($body);
+		
+		libxml_use_internal_errors($internalErrors);
 
         $images = $dom->getElementsByTagName('img');
         foreach ($images as $image) {
@@ -80,13 +84,62 @@ class ImageEmbedPlugin implements Swift_Events_SendListener
                 }
             }
         }
+		
+		$tables = $dom->getElementsByTagName('table');
+		
+		$findreplacelist = array();
+		
+		foreach($tables as $table)
+		{
+			foreach ($table->childNodes as $tr) {
+			  if ($tr->nodeName == 'tr') {
+			  
+			foreach ($tr->childNodes as $td) {
+			  
+			  if ($td->nodeName == 'td') {
 
-        return utf8_decode($dom->saveHTML($dom->documentElement));
+	            $src = $td->getAttribute('background');
+
+	            if ($src && strpos($src, 'cid:') === false) {
+					$path = $this->getPathFromSrc($src);
+
+	                if ($this->fileExists($path)) {
+        				$entity = \Swift_Image::fromPath($path);
+	                    $message->setChildren(
+	                        array_merge($message->getChildren(), [$entity])
+	                    );
+
+	                    $td->setAttribute('background', 'cid:' . $entity->getId());
+	                    $td->setAttribute('style', str_replace($src,'cid:' . $entity->getId(),$td->getAttribute('style')));
+
+						$fr = array("find"=>$src,"replace"=>'cid:' . $entity->getId());
+						$findreplacelist[] = $fr;
+					
+	                }
+	            }
+				}
+				}
+			
+			  }
+			}	
+		}			
+		
+		$html = $dom->saveHTML();
+		
+		if(count($findreplacelist))
+		{
+			foreach($findreplacelist as $fr)
+			{
+				$html = str_replace($fr['find'],$fr['replace'],$html);
+			}
+		}
+	
+        return $html;
     }
 
     protected function isUrl(string $path) : bool
     {
-        return filter_var($path, FILTER_VALIDATE_URL) !== false;
+        return filter_var(preg_replace('/ /', '%20', $path), FILTER_VALIDATE_URL) !== false;
     }
 
     protected function getPathFromSrc(string $src) : string
